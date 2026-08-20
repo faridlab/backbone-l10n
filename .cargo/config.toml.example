@@ -1,0 +1,6 @@
+# Copy to .cargo/config.toml (gitignored) to build l10n against a LOCAL checkout of
+# backbone-accounting (../backbone-accounting). Without this file, Cargo builds it from
+# its pinned git tag (the prod/CI path). See Cargo.toml.
+
+[patch."https://github.com/faridlab/backbone-accounting"]
+backbone-accounting = { path = "../backbone-accounting" }
