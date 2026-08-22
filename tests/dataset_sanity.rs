@@ -3,7 +3,10 @@
 
 use backbone_accounting::domain::chart_dataset::validate_dataset;
 use backbone_accounting::domain::entity::AccountSubtype;
-use backbone_l10n::{id_sak_chart, id_starter_tax_templates, starter_tax_tag_codes};
+use backbone_l10n::{
+    id_efaktur_csv_column_set, id_sak_chart, id_starter_tax_templates, starter_tax_tag_codes,
+    EFakturCsvRecord,
+};
 use rust_decimal::Decimal;
 use std::collections::HashSet;
 
@@ -82,8 +85,11 @@ fn classification_pins() {
     use backbone_accounting::domain::entity::NormalBalance;
     assert_eq!(by_code("4120000").normal_balance, NormalBalance::Debit); // Retur Penjualan
     assert_eq!(by_code("3120000").normal_balance, NormalBalance::Debit); // Prive
-    // The accumulated-depreciation header matches its credit-balance children.
-    assert_eq!(by_code("1212000").account_subtype, AccountSubtype::AccumulatedDepreciation);
+                                                                         // The accumulated-depreciation header matches its credit-balance children.
+    assert_eq!(
+        by_code("1212000").account_subtype,
+        AccountSubtype::AccumulatedDepreciation
+    );
     assert_eq!(by_code("1212001").normal_balance, NormalBalance::Credit); // Akumulasi Penyusutan
 
     // COGS and other-income routing.
@@ -134,13 +140,23 @@ fn tax_defs_reference_existing_chart_codes() {
     for t in id_starter_tax_templates() {
         for r in &t.rows {
             if let Some(c) = &r.account_code {
-                assert!(codes.contains(c.as_str()), "{} row references missing {}", t.code, c);
+                assert!(
+                    codes.contains(c.as_str()),
+                    "{} row references missing {}",
+                    t.code,
+                    c
+                );
             }
         }
         for f in &t.families {
             for s in &f.tax_splits {
                 if let Some(c) = &s.account_code {
-                    assert!(codes.contains(c.as_str()), "{} family references missing {}", t.code, c);
+                    assert!(
+                        codes.contains(c.as_str()),
+                        "{} family references missing {}",
+                        t.code,
+                        c
+                    );
                 }
             }
         }
@@ -152,7 +168,13 @@ fn tax_split_factors_sum_100_per_family() {
     for t in id_starter_tax_templates() {
         for f in &t.families {
             let sum: Decimal = f.tax_splits.iter().map(|s| s.factor_percent).sum();
-            assert_eq!(sum, Decimal::ONE_HUNDRED, "{} / {}", t.code, f.document_type);
+            assert_eq!(
+                sum,
+                Decimal::ONE_HUNDRED,
+                "{} / {}",
+                t.code,
+                f.document_type
+            );
         }
     }
 }
@@ -171,9 +193,17 @@ fn tax_rows_within_rate_range_and_tag_codes_resolve() {
             t.code
         );
         for r in &t.rows {
-            assert!(r.rate > Decimal::ZERO && r.rate <= Decimal::ONE_HUNDRED, "{} rate", t.code);
+            assert!(
+                r.rate > Decimal::ZERO && r.rate <= Decimal::ONE_HUNDRED,
+                "{} rate",
+                t.code
+            );
             if r.effective_to.is_some() {
-                assert!(r.effective_to.unwrap() >= r.effective_from, "{} window", t.code);
+                assert!(
+                    r.effective_to.unwrap() >= r.effective_from,
+                    "{} window",
+                    t.code
+                );
             }
         }
         for f in &t.families {
@@ -187,4 +217,86 @@ fn tax_rows_within_rate_range_and_tag_codes_resolve() {
             }
         }
     }
+}
+
+// ── e-Faktur CSV column set ───────────────────────────────────────────────────
+
+#[test]
+fn efaktur_csv_column_set_shape_pins() {
+    let set = id_efaktur_csv_column_set();
+    assert!(!set.version.is_empty(), "the set carries a version");
+    assert_eq!(set.columns.len(), 25, "16 FK header + 9 OF detail columns");
+
+    let fk = set.columns_for(EFakturCsvRecord::Fk);
+    let of = set.columns_for(EFakturCsvRecord::Of);
+    assert_eq!(fk.len(), 16, "FK header record columns");
+    assert_eq!(of.len(), 9, "OF detail record columns");
+
+    // Emission order is contiguous 1..=n within each record.
+    let fk_orders: Vec<i32> = fk.iter().map(|c| c.order).collect();
+    assert_eq!(
+        fk_orders,
+        (1..=16).collect::<Vec<i32>>(),
+        "FK order contiguous"
+    );
+    let of_orders: Vec<i32> = of.iter().map(|c| c.order).collect();
+    assert_eq!(
+        of_orders,
+        (1..=9).collect::<Vec<i32>>(),
+        "OF order contiguous"
+    );
+
+    // Keys are unique and derive from record tag + label; labels/formats are filled in.
+    let keys: HashSet<&str> = set.columns.iter().map(|c| c.key.as_str()).collect();
+    assert_eq!(keys.len(), set.columns.len(), "column keys unique");
+    for c in &set.columns {
+        let prefix = c.record.tag();
+        assert_eq!(c.key, format!("{}_{}", prefix, c.label), "{} key", c.key);
+        assert!(!c.label.is_empty(), "{} label", c.key);
+        assert!(!c.format.is_empty(), "{} format", c.key);
+        assert!(!c.source_note.is_empty(), "{} source note", c.key);
+        assert!(
+            c.source_note.contains("PER-24/PJ/2019"),
+            "{} cites the regulation",
+            c.key
+        );
+        if let Some(to) = c.effective_to {
+            assert!(to >= c.effective_from, "{} window", c.key);
+        }
+    }
+
+    // The whole set is pending review — the reviewer flip is a new version, never
+    // an in-place edit that this pin would silently bless.
+    assert!(
+        set.columns.iter().all(|c| c.reviewer_status == "pending"),
+        "every column ships reviewer_status=pending"
+    );
+
+    // Effective-dating: the set's window covers its columns' windows.
+    for c in &set.columns {
+        assert!(
+            c.effective_from >= set.effective_from,
+            "{} inside the set window",
+            c.key
+        );
+    }
+}
+
+#[test]
+fn efaktur_csv_core_columns_carry_their_masks() {
+    let set = id_efaktur_csv_column_set();
+    let fk = |label: &str| {
+        set.columns
+            .iter()
+            .find(|c| c.record == EFakturCsvRecord::Fk && c.label == label)
+            .unwrap_or_else(|| panic!("FK_{label} in the set"))
+    };
+
+    // The number column emits the 19-char DJP mask; the date is dd/mm/yyyy.
+    assert_eq!(fk("NOMOR_FAKTUR").format, "mask:010.NNN-NN.YYYYYYYY");
+    assert_eq!(fk("TANGGAL_FAKTUR").format, "date:dd/mm/yyyy");
+
+    // The FK/OF tags the exporter writes as each record's first field.
+    assert_eq!(EFakturCsvRecord::Fk.tag(), "FK");
+    assert_eq!(EFakturCsvRecord::Of.tag(), "OF");
 }

@@ -14,6 +14,13 @@
 //!   install time. Rates and classifications are STARTER data, non-authoritative:
 //!   corrections ship as a new chart/template version, never as in-place edits
 //!   under a tenant.
+//! - the DJP e-Faktur CSV column set ([`EFakturCsvColumnDef`]): the structure
+//!   of the CSV the tax office's e-Faktur application imports (one `FK` header
+//!   record per faktur, one `OF` record per detail line). Effective-dated and
+//!   versioned like the chart; every column carries `reviewer_status` — the
+//!   set ships `"pending"` until a compliance reviewer signs off the
+//!   authoritative column vocabulary. Exporters must read THIS set, never a
+//!   hard-coded column list, so a regulatory change ships as dataset data.
 //!
 //! Only backbone-accounting's enum vocabulary is imported. The tax module is
 //! deliberately not a dependency — the edge stays minimal and one-directional.
@@ -228,4 +235,170 @@ pub fn id_starter_tax_templates() -> Vec<TaxTemplateDef> {
             ],
         },
     ]
+}
+
+// ── DJP e-Faktur CSV column set ───────────────────────────────────────────────
+
+/// Which e-Faktur CSV record a column belongs to: `FK` is the per-faktur header
+/// record, `OF` the per-detail-line record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EFakturCsvRecord {
+    Fk,
+    Of,
+}
+
+impl EFakturCsvRecord {
+    /// The DJP record tag as it appears in the CSV's first field.
+    pub fn tag(&self) -> &'static str {
+        match self {
+            EFakturCsvRecord::Fk => "FK",
+            EFakturCsvRecord::Of => "OF",
+        }
+    }
+}
+
+/// One column of the DJP e-Faktur CSV exchange. Dataset-shaped and
+/// effective-dated: the exporter reads these definitions — never a hard-coded
+/// column list — so a regulatory change to the exchange format ships as a new
+/// dataset version rather than code.
+#[derive(Debug, Clone)]
+pub struct EFakturCsvColumnDef {
+    /// Stable field key (`FK_NOMOR_FAKTUR`, `OF_PPN`): record tag + the DJP label.
+    pub key: String,
+    /// The DJP column label exactly as it must appear in the export.
+    pub label: String,
+    /// The record this column belongs to.
+    pub record: EFakturCsvRecord,
+    /// 1-based emission order within the record.
+    pub order: i32,
+    /// Value format / mask (`date:dd/mm/yyyy`, `mask:010.NNN-NN.YYYYYYYY`,
+    /// `numeric`, `flag:0|1`, `npwp`, `percent`, `text`, `enum`).
+    pub format: String,
+    pub effective_from: NaiveDate,
+    pub effective_to: Option<NaiveDate>,
+    /// Provenance and value-vocabulary note (regulation citation, enum values).
+    pub source_note: String,
+    /// `"pending"` until a compliance reviewer signs off the column as
+    /// authoritative; the exporter stamps its output with this so a pending
+    /// set is visible downstream. Corrections ship as a new dataset version —
+    /// this field is never edited in place to `"approved"` outside review.
+    pub reviewer_status: String,
+}
+
+/// A versioned snapshot of the e-Faktur CSV column set. The exporter's response
+/// carries `version` (and the pending marker) so a downloaded CSV is always
+/// traceable to the exact column set that produced it.
+#[derive(Debug, Clone)]
+pub struct EFakturCsvColumnSet {
+    pub version: String,
+    pub effective_from: NaiveDate,
+    pub effective_to: Option<NaiveDate>,
+    pub columns: Vec<EFakturCsvColumnDef>,
+}
+
+impl EFakturCsvColumnSet {
+    /// The columns of one record, emission-ordered.
+    pub fn columns_for(&self, record: EFakturCsvRecord) -> Vec<&EFakturCsvColumnDef> {
+        let mut cols: Vec<&EFakturCsvColumnDef> =
+            self.columns.iter().filter(|c| c.record == record).collect();
+        cols.sort_by_key(|c| c.order);
+        cols
+    }
+}
+
+/// The DJP e-Faktur CSV column set, PER-24/PJ/2019 shape (the format the tax
+/// office's e-Faktur application imports): 16 `FK` header fields per faktur +
+/// 9 `OF` fields per detail line. Non-authoritative until review — every column
+/// carries `reviewer_status: "pending"`, and the set is effective-dated so a
+/// successor regulation (e.g. a Coretax-era exchange) supersedes it by window,
+/// not by edit.
+pub fn id_efaktur_csv_column_set() -> EFakturCsvColumnSet {
+    // PER-24/PJ/2019 was issued 2019-12-19; the window stays open — whether a
+    // later regulation supersedes it is the reviewer's call, recorded as a new
+    // dated version of this set.
+    let from = NaiveDate::from_ymd_opt(2019, 12, 19).expect("valid date");
+    let reg = "PER-24/PJ/2019";
+
+    let fk = |order: i32, label: &str, format: &str, note: &str| EFakturCsvColumnDef {
+        key: format!("FK_{label}"),
+        label: label.to_string(),
+        record: EFakturCsvRecord::Fk,
+        order,
+        format: format.to_string(),
+        effective_from: from,
+        effective_to: None,
+        source_note: format!("{reg}: {note}"),
+        reviewer_status: "pending".to_string(),
+    };
+    let of = |order: i32, label: &str, format: &str, note: &str| EFakturCsvColumnDef {
+        key: format!("OF_{label}"),
+        label: label.to_string(),
+        record: EFakturCsvRecord::Of,
+        order,
+        format: format.to_string(),
+        effective_from: from,
+        effective_to: None,
+        source_note: format!("{reg}: {note}"),
+        reviewer_status: "pending".to_string(),
+    };
+
+    EFakturCsvColumnSet {
+        version: "ID-EFAKTUR-CSV-1".to_string(),
+        effective_from: from,
+        effective_to: None,
+        columns: vec![
+            // ── FK: one header record per faktur ──
+            fk(1, "KD_JENIS_DOKUMEN", "enum",
+                "document-kind code; value vocabulary (netto / credit note / replacement) rides the source note pending reviewer sign-off"),
+            fk(2, "FG_PKP", "flag:0|1",
+                "pengukuhan pengusaha kena pajak flag of the buyer"),
+            fk(3, "NOMOR_FAKTUR", "mask:010.NNN-NN.YYYYYYYY",
+                "the 19-character e-Faktur number (transaction code . taxpayer segment - masa . 8-digit sequence)"),
+            fk(4, "TANGGAL_FAKTUR", "date:dd/mm/yyyy",
+                "document date (the e-Faktur assignment date)"),
+            fk(5, "NPWP", "npwp",
+                "buyer tax identification number, digits only, no separators"),
+            fk(6, "NAMA", "text",
+                "buyer name; CSV separators inside the value must be neutralized by the exporter"),
+            fk(7, "ALAMAT_LENGKAP", "text",
+                "buyer full address"),
+            fk(8, "JUMLAH_DPP", "numeric",
+                "faktur total taxable base (dasar pengenaan pajak), dot decimal, no grouping separators"),
+            fk(9, "JUMLAH_PPN", "numeric",
+                "faktur total VAT"),
+            fk(10, "JUMLAH_PPNBM", "numeric",
+                "faktur total luxury-goods sales tax; zero outside luxury goods"),
+            fk(11, "ID_KETERANGAN_TAMBAHAN", "enum",
+                "additional-explanation code; value vocabulary pending reviewer sign-off"),
+            fk(12, "FG_UANG_MUKA", "flag:0|1",
+                "whether the faktur settles against an earlier prepayment (uang muka)"),
+            fk(13, "UANG_MUKA_DPP", "numeric",
+                "prepayment base already credited on this faktur"),
+            fk(14, "UANG_MUKA_PPN", "numeric",
+                "prepayment VAT already credited on this faktur"),
+            fk(15, "UANG_MUKA_PPNBM", "numeric",
+                "prepayment luxury-goods sales tax already credited"),
+            fk(16, "REFERENSI", "text",
+                "free reference (e.g. the customer purchase order number)"),
+            // ── OF: one record per detail line ──
+            of(1, "KD_KODE_BARANG", "text",
+                "product / service code of the line"),
+            of(2, "NAMA_BARANG", "text",
+                "product / service name of the line"),
+            of(3, "HARGA_SATUAR", "numeric",
+                "unit price, dot decimal, no grouping separators"),
+            of(4, "JUMLAH_BARANG", "numeric",
+                "quantity; fractional values allowed, dot decimal"),
+            of(5, "HARGA_TOTAL", "numeric",
+                "unit price x quantity"),
+            of(6, "DPP", "numeric",
+                "line taxable base"),
+            of(7, "PPN", "numeric",
+                "line VAT"),
+            of(8, "TARIF_PPNBM", "percent",
+                "luxury-goods sales tax rate; zero outside luxury goods"),
+            of(9, "PPNBM", "numeric",
+                "line luxury-goods sales tax"),
+        ],
+    }
 }
