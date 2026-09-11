@@ -1,6 +1,6 @@
 [package]
 name = "backbone-l10n"
-version = "0.1.8"
+version = "0.1.10"
 edition = "2021"
 description = "Indonesian localization datasets: SAK chart of accounts + starter tax templates"
 
@@ -15,7 +15,7 @@ path = "src/lib.rs"
 # `id_sak_chart()` returns accounting's `ChartDataset`, so a pin drift splits
 # the dependency graph into two accounting copies and type-errors at the
 # composition site (the local workspace [patch] hides the split; CI exposes it).
-backbone-accounting = { git = "https://github.com/faridlab/backbone-accounting", tag = "v0.7.0" }
+backbone-accounting = { git = "https://github.com/faridlab/backbone-accounting", tag = "v0.8.0" }
 
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
