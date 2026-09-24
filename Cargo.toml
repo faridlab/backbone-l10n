@@ -1,6 +1,6 @@
 [package]
 name = "backbone-l10n"
-version = "0.1.20"
+version = "0.1.21"
 edition = "2021"
 description = "Indonesian localization datasets: SAK chart of accounts + starter tax templates"
 
