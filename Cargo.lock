@@ -191,9 +191,9 @@ dependencies = [
 
 [[package]]
 name = "backbone-accounting"
-version = "0.16.0"
+version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09a3c75ce606c11e43b924eb80ac34c1cfd96677ba0d48669bb029a4088fd16a"
+checksum = "a9b3a5bb549a2f7518a21c29af953b14085858f08e16754ecae1335c861bdda9"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -284,7 +284,7 @@ dependencies = [
 
 [[package]]
 name = "backbone-l10n"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "backbone-accounting",
  "chrono",
@@ -3729,4 +3729,4 @@ checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
 
 [[patch.unused]]
 name = "backbone-accounting"
-version = "0.16.0"
+version = "0.17.0"
